@@ -37,6 +37,16 @@ def load_corpus(root: str | None = None, val_frac: float = 0.05) -> tuple[np.nda
     return join(tr), join(va)
 
 
+def corpus_fingerprint(train: np.ndarray, val: np.ndarray) -> dict:
+    """The corpus is the *local* stdlib, so it differs across Python versions: record it."""
+    return {
+        "python": sys.version.split()[0],
+        "train_bytes": int(len(train)),
+        "val_bytes": int(len(val)),
+        "crc32": zlib.crc32(train.tobytes()) ^ zlib.crc32(val.tobytes()),
+    }
+
+
 def batch(data: np.ndarray, B: int, T: int, gen: np.random.Generator) -> torch.Tensor:
     ix = gen.integers(0, len(data) - T - 1, B)
     return torch.from_numpy(np.stack([data[i : i + T + 1] for i in ix]).astype(np.int64))
@@ -89,7 +99,7 @@ class GPT(nn.Module):
                 nn.init.normal_(p, 0.0, std)
 
     def forward(self, idx):
-        x = self.tok(idx) + self.pos(torch.arange(idx.shape[1]))
+        x = self.tok(idx) + self.pos(torch.arange(idx.shape[1], device=idx.device))
         for b in self.blocks:
             x = b(x)
         return self.ln(x) @ self.tok.weight.T  # tied output head
@@ -116,12 +126,14 @@ def default_lr(d_model: int) -> float:
 
 
 @torch.no_grad()
-def evaluate(model: GPT, data: np.ndarray, T: int, n_batches: int = 40, B: int = 32) -> float:
+def evaluate(
+    model: GPT, data: np.ndarray, T: int, n_batches: int = 40, B: int = 32, device: str = "cpu"
+) -> float:
     model.eval()
     gen = np.random.default_rng(1234)  # fixed eval windows for every model
     tot = 0.0
     for _ in range(n_batches):
-        xb = batch(data, B, T, gen)
+        xb = batch(data, B, T, gen).to(device)
         tot += F.cross_entropy(model(xb[:, :-1]).flatten(0, 1), xb[:, 1:].flatten()).item()
     model.train()
     return tot / n_batches
@@ -137,10 +149,11 @@ def train(
     lr: float | None = None,
     seed: int = 0,
     log_every: int = 50,
+    device: str = "cpu",
 ) -> RunResult:
     torch.manual_seed(seed)
     gen = np.random.default_rng(seed)
-    model = GPT(shape, ctx=T)
+    model = GPT(shape, ctx=T).to(device)
     lr = lr or default_lr(shape.d_model)
     decay = [p for p in model.parameters() if p.dim() >= 2]
     other = [p for p in model.parameters() if p.dim() < 2]
@@ -162,7 +175,7 @@ def train(
     for s in range(steps):
         for g in opt.param_groups:
             g["lr"] = lr_at(s)
-        xb = batch(train_data, B, T, gen)
+        xb = batch(train_data, B, T, gen).to(device, non_blocking=True)
         loss = F.cross_entropy(model(xb[:, :-1]).flatten(0, 1), xb[:, 1:].flatten())
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -179,7 +192,7 @@ def train(
         D,
         6.0 * shape.n_params * D,
         lr,
-        evaluate(model, val_data, T),
+        evaluate(model, val_data, T, device=device),
         float(ema),
         steps,
         time.time() - t0,
