@@ -22,6 +22,7 @@ scaling = "scaling.cli:main"
 where = ["src"]
 
 [tool.ruff]
+extend-exclude = ["notebooks"]  # Colab notebooks use shell magics
 line-length = 100
 target-version = "py310"
 
