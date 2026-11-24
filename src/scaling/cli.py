@@ -44,11 +44,7 @@ def plan(budgets: list[float], per_budget: int = 5) -> list[tuple[float, Shape, 
     ``MIN_STEPS`` optimizer steps."""
     out = []
     for c in budgets:
-        ok = [
-            s
-            for s in SHAPES
-            if MIN_STEPS * B * T <= c / (6 * s.n_params) <= MAX_TOKENS
-        ]
+        ok = [s for s in SHAPES if MIN_STEPS * B * T <= c / (6 * s.n_params) <= MAX_TOKENS]
         guess = 35_000 * (c / 1e12) ** 0.5
         centre = min(range(len(ok)), key=lambda i: abs(ok[i].n_params - guess))
         lo = max(0, min(centre - per_budget // 2, len(ok) - per_budget))
