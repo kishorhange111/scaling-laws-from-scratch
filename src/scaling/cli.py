@@ -18,6 +18,8 @@ from .core import Shape, load_corpus, train
 from .fit import analyse
 
 SHAPES = [
+    Shape(1, 16, 2),
+    Shape(1, 24, 2),
     Shape(1, 32),
     Shape(2, 32),
     Shape(2, 48),
@@ -28,17 +30,26 @@ SHAPES = [
     Shape(6, 160),
     Shape(6, 192),
 ]
-B, T = 32, 128
-MIN_STEPS = 150
+# 1,024-token batches: with 4,096-token batches the smallest budgets gave too few
+# steps to larger models and the IsoFLOP minimum sat at the grid edge
+# (results/ablation_b32_t128).
+B, T = 16, 64
+MIN_STEPS = 400
+MAX_TOKENS = 100_000_000  # CPU wall-clock cap; tiny models at large C are off-optimum anyway
 
 
 def plan(budgets: list[float], per_budget: int = 5) -> list[tuple[float, Shape, int]]:
-    """For each budget pick ``per_budget`` consecutive sizes around the Chinchilla
-    heuristic N ≈ sqrt(C / 120), keeping at least ``MIN_STEPS`` optimizer steps."""
+    """For each budget pick ``per_budget`` consecutive sizes around a centre guess
+    N ≈ 35k * sqrt(C / 1e12) (from a pilot at C = 1e12), keeping at least
+    ``MIN_STEPS`` optimizer steps."""
     out = []
     for c in budgets:
-        ok = [s for s in SHAPES if c / (6 * s.n_params) >= MIN_STEPS * B * T]
-        guess = (c / 120) ** 0.5
+        ok = [
+            s
+            for s in SHAPES
+            if MIN_STEPS * B * T <= c / (6 * s.n_params) <= MAX_TOKENS
+        ]
+        guess = 35_000 * (c / 1e12) ** 0.5
         centre = min(range(len(ok)), key=lambda i: abs(ok[i].n_params - guess))
         lo = max(0, min(centre - per_budget // 2, len(ok) - per_budget))
         for s in ok[lo : lo + per_budget]:
@@ -55,7 +66,8 @@ def _work(args):
     torch.set_num_threads(threads)
     if _DATA is None:
         _DATA = load_corpus()
-    r = train(Shape(n_layer, d_model), tokens, *_DATA, B=B, T=T)
+    shape = next(s for s in SHAPES if (s.n_layer, s.d_model) == (n_layer, d_model))
+    r = train(shape, tokens, *_DATA, B=B, T=T)
     return {"budget": c, **asdict(r)}
 
 
@@ -90,9 +102,9 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="scaling")
     ap.add_argument("cmd", choices=["plan", "run", "fit"])
     ap.add_argument("--budgets", type=float, nargs="+", default=[1e12, 3e12, 1e13, 3e13])
-    ap.add_argument("--per-budget", type=int, default=5)
-    ap.add_argument("--workers", type=int, default=2)
-    ap.add_argument("--threads", type=int, default=3)
+    ap.add_argument("--per-budget", type=int, default=6)
+    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--out", type=Path, default=Path("results"))
     a = ap.parse_args(argv)
     if a.cmd == "plan":
