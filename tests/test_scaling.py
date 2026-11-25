@@ -52,3 +52,20 @@ def test_parametric_fit_recovers_synthetic_law():
     ]
     p = fit_parametric(rows)
     assert p["rmse"] < 1e-3 and abs(p["alpha"] - al) < 0.05 and abs(p["beta"] - be) < 0.05
+
+
+def test_default_corpus_found_on_this_platform():
+    """Regression: the default root was <prefix>/Lib, which only exists on Windows."""
+    from scaling.core import load_corpus
+
+    train, val = load_corpus()
+    assert len(train) > 1_000_000 and len(val) > 10_000
+
+
+def test_empty_root_fails_loudly(tmp_path):
+    import pytest
+
+    from scaling.core import load_corpus
+
+    with pytest.raises(FileNotFoundError):
+        load_corpus(str(tmp_path))

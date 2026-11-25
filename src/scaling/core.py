@@ -14,6 +14,7 @@ import glob
 import math
 import os
 import sys
+import sysconfig
 import time
 import zlib
 from dataclasses import dataclass
@@ -25,8 +26,12 @@ from torch import nn
 
 
 def load_corpus(root: str | None = None, val_frac: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
-    root = root or os.path.join(sys.base_prefix, "Lib")
+    # sysconfig knows where the stdlib lives on every platform (<prefix>/Lib on Windows,
+    # <prefix>/lib/python3.X on Linux and macOS).
+    root = root or sysconfig.get_paths()["stdlib"]
     files = sorted(glob.glob(os.path.join(root, "**", "*.py"), recursive=True))
+    if not files:
+        raise FileNotFoundError(f"no .py files under {root!r}; pass root= explicitly")
     tr, va = [], []
     for f in files:
         rel = os.path.relpath(f, root).replace("\\", "/")
